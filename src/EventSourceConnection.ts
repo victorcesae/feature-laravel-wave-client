@@ -1,197 +1,219 @@
-import { EventSourceMessage, fetchEventSource } from '@microsoft/fetch-event-source';
-import { Options } from './echo-broadcaster/wave-connector'
+import {
+  EventSourceMessage,
+  fetchEventSource,
+} from "@microsoft/fetch-event-source";
+import { Options } from "./echo-broadcaster/wave-connector";
 
-class RetriableError extends Error { }
+class RetriableError extends Error {}
 
-class FatalError extends Error { }
+class FatalError extends Error {}
 
 export class EventSourceConnection {
-    protected id: string;
-    protected listeners: Record<string, Map<Function, (message: EventSourceMessage) => void>> = {};
-    protected afterConnectCallbacks: ((connectionId) => void)[] = [];
-    protected reconnecting = false;
-    protected ctrl: AbortController;
-    protected sourcePromise: Promise<void>;
+  protected id: string;
+  protected listeners: Record<
+    string,
+    Map<Function, (message: EventSourceMessage) => void>
+  > = {};
+  protected afterConnectCallbacks: ((connectionId) => void)[] = [];
+  protected reconnecting = false;
+  protected ctrl: AbortController;
+  protected sourcePromise: Promise<void>;
 
-    constructor(endpoint: string, options?: Options) {
-        options = {
-            reconnect: true,
-            pauseInactive: false,
-            debug: false,
-            ...options,
-        }
+  constructor(endpoint: string, options?: Options) {
+    options = {
+      reconnect: true,
+      pauseInactive: false,
+      debug: false,
+      ...options,
+    };
 
-        this.ctrl = new AbortController();
+    this.ctrl = new AbortController();
 
-        let formattedHeaders: Record<string, string> = {};
+    let formattedHeaders: Record<string, string> = {};
 
-        if (options.request?.headers) {
-            if (options.request.headers instanceof Headers) {
-                options.request.headers.forEach((value, key) => {
-                    formattedHeaders[key] = value;
-                });
-            } else if (Array.isArray(options.request.headers)) {
-                formattedHeaders = Object.fromEntries(options.request.headers);
-            } else {
-                formattedHeaders = options.request.headers;
-            }
-        }
-
-        let csrfToken =  '';
-
-        if (typeof document !== 'undefined' && options.auth?.headers['X-CSRF-TOKEN'] === undefined) {
-            const match = document.cookie.match(new RegExp('(^|;\\s*)(XSRF-TOKEN)=([^;]*)'));
-            csrfToken = match ? decodeURIComponent(match[3]) : null;
-        }
-
-        const csrfTokenHeader = csrfToken ? {'X-XSRF-TOKEN': csrfToken} : {}
-
-        this.sourcePromise = fetchEventSource(endpoint, {
-             signal: this.ctrl.signal,
-            ...{
-                ...options.request,
-                headers: {
-                    'Cache-Control': 'no-cache',
-                    'Pragma': 'no-cache',
-                    'Connection': 'keep-alive',
-                    ...options.auth?.headers,
-                    ...csrfTokenHeader,
-                    ...formattedHeaders,
-                }
-            },
-            openWhenHidden: typeof options.pauseInactive === 'undefined' ? true : !options.pauseInactive,
-            async onopen(response) {
-                if (response.ok && response.headers.get('content-type').startsWith('text/event-stream')) {
-                    return; // everything's good
-                } else if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-                    // client-side errors are usually non-retriable:
-                    throw new FatalError();
-                } else {
-                    throw new RetriableError();
-                }
-            },
-            onmessage: (message) => {
-                // if the server emits an error message, throw an exception
-                // so it gets handled by the onerror callback below:
-                if (options.debug) {
-                    debugEvent(message);
-                }
-
-                if (message.event === 'connected') {
-                    this.id = message.data;
-
-                    if (!this.reconnecting) {
-                        this.afterConnectCallbacks.forEach(callback => callback(this.id));
-                    }
-
-                    this.reconnecting = false;
-
-                    if (options.debug) {
-                        console.log('Wave connected.');
-                    }
-
-                    return;
-                }
-
-                this.listeners[message.event]?.forEach(listener => listener({ ...message }));
-            },
-            onclose: () => {
-                 if (this.ctrl.signal.aborted || !options.reconnect) {
-                     if (options.debug) {
-                         console.log('Wave disconnected.');
-                     }
-                    return;
-                 }
-                // if the server closes the connection unexpectedly, retry:
-                throw new RetriableError();
-            },
-            onerror: (err) => {
-                if (err instanceof FatalError || 'matcherResult' in err) {
-                    throw err; // rethrow to stop the operation
-                } else {
-                    // do nothing to automatically retry. You can also
-                    // return a specific retry interval here.
-                    this.reconnecting = true;
-                    if (options.debug) {
-                        console.log('Wave reconnecting...');
-                    }
-                }
-            },
+    if (options.request?.headers) {
+      if (options.request.headers instanceof Headers) {
+        options.request.headers.forEach((value, key) => {
+          formattedHeaders[key] = value;
         });
+      } else if (Array.isArray(options.request.headers)) {
+        formattedHeaders = Object.fromEntries(options.request.headers);
+      } else {
+        formattedHeaders = options.request.headers;
+      }
     }
 
-    public getId() {
-        return this.id;
+    let csrfToken = "";
+
+    if (
+      typeof document !== "undefined" &&
+      options.auth?.headers["X-CSRF-TOKEN"] === undefined
+    ) {
+      const match = document.cookie.match(
+        new RegExp("(^|;\\s*)(XSRF-TOKEN)=([^;]*)")
+      );
+      csrfToken = match ? decodeURIComponent(match[3]) : null;
     }
 
-    public getSourcePromise() {
-        return this.sourcePromise;
-    }
+    const csrfTokenHeader = csrfToken ? { "X-XSRF-TOKEN": csrfToken } : {};
 
-    public subscribe(event: string, callback: Function) {
-        let listener = function (event: EventSourceMessage) {
-            callback(JSON.parse(event.data));
-        };
-
-        if (!this.listeners[event]) {
-            this.listeners[event] = new Map();
+    this.sourcePromise = fetchEventSource((options.host ?? "") + endpoint, {
+      signal: this.ctrl.signal,
+      ...{
+        ...options.request,
+        headers: {
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+          Connection: "keep-alive",
+          ...options.auth?.headers,
+          ...csrfTokenHeader,
+          ...formattedHeaders,
+        },
+      },
+      openWhenHidden:
+        typeof options.pauseInactive === "undefined"
+          ? true
+          : !options.pauseInactive,
+      async onopen(response) {
+        if (
+          response.ok &&
+          response.headers.get("content-type").startsWith("text/event-stream")
+        ) {
+          return; // everything's good
+        } else if (
+          response.status >= 400 &&
+          response.status < 500 &&
+          response.status !== 429
+        ) {
+          // client-side errors are usually non-retriable:
+          throw new FatalError();
+        } else {
+          throw new RetriableError();
+        }
+      },
+      onmessage: (message) => {
+        // if the server emits an error message, throw an exception
+        // so it gets handled by the onerror callback below:
+        if (options.debug) {
+          debugEvent(message);
         }
 
-        this.listeners[event].set(callback, listener);
-    }
+        if (message.event === "connected") {
+          this.id = message.data;
 
-    public unsubscribe(event: string) {
-        delete this.listeners[event];
-    }
+          if (!this.reconnecting) {
+            this.afterConnectCallbacks.forEach((callback) => callback(this.id));
+          }
 
-    public removeListener(event: string, callback: Function) {
-        if (!this.listeners[event] || !this.listeners[event].has(callback)) {
-            return;
+          this.reconnecting = false;
+
+          if (options.debug) {
+            console.log("Wave connected.");
+          }
+
+          return;
         }
 
-        this.listeners[event].delete(callback);
-
-        if (this.listeners[event].size === 0) {
-            delete this.listeners[event];
+        this.listeners[message.event]?.forEach((listener) =>
+          listener({ ...message })
+        );
+      },
+      onclose: () => {
+        if (this.ctrl.signal.aborted || !options.reconnect) {
+          if (options.debug) {
+            console.log("Wave disconnected.");
+          }
+          return;
         }
+        // if the server closes the connection unexpectedly, retry:
+        throw new RetriableError();
+      },
+      onerror: (err) => {
+        if (err instanceof FatalError || "matcherResult" in err) {
+          throw err; // rethrow to stop the operation
+        } else {
+          // do nothing to automatically retry. You can also
+          // return a specific retry interval here.
+          this.reconnecting = true;
+          if (options.debug) {
+            console.log("Wave reconnecting...");
+          }
+        }
+      },
+    });
+  }
+
+  public getId() {
+    return this.id;
+  }
+
+  public getSourcePromise() {
+    return this.sourcePromise;
+  }
+
+  public subscribe(event: string, callback: Function) {
+    let listener = function (event: EventSourceMessage) {
+      callback(JSON.parse(event.data));
+    };
+
+    if (!this.listeners[event]) {
+      this.listeners[event] = new Map();
     }
 
-    public disconnect() {
-        this.ctrl.abort('disconnect');
+    this.listeners[event].set(callback, listener);
+  }
+
+  public unsubscribe(event: string) {
+    delete this.listeners[event];
+  }
+
+  public removeListener(event: string, callback: Function) {
+    if (!this.listeners[event] || !this.listeners[event].has(callback)) {
+      return;
     }
 
-    public afterConnect(callback: (connectionId) => void) {
-        this.afterConnectCallbacks.push(callback);
+    this.listeners[event].delete(callback);
+
+    if (this.listeners[event].size === 0) {
+      delete this.listeners[event];
     }
+  }
+
+  public disconnect() {
+    this.ctrl.abort("disconnect");
+  }
+
+  public afterConnect(callback: (connectionId) => void) {
+    this.afterConnectCallbacks.push(callback);
+  }
 }
 
-
 function debugEvent(message) {
-    let data = message.data;
+  let data = message.data;
 
-    try {
-        // Attempt to parse as JSON
-        let parsedData = JSON.parse(data);
-        // If successful, replace the data with the stringified parsed data
-        data = JSON.stringify(parsedData, null, 2);
-    } catch (error) {
-        // If it's not valid JSON, just leave the data as it is
-    }
+  try {
+    // Attempt to parse as JSON
+    let parsedData = JSON.parse(data);
+    // If successful, replace the data with the stringified parsed data
+    data = JSON.stringify(parsedData, null, 2);
+  } catch (error) {
+    // If it's not valid JSON, just leave the data as it is
+  }
 
-    const now = new Date();
+  const now = new Date();
 
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const seconds = String(now.getSeconds()).padStart(2, "0");
 
-    console.group(`Received server event ${hours}:${minutes}:${seconds}`);
-    console.table({
-        [message.id]: {
-            event: message.event,
-            data,
-            retry: message.retry,
-        }
-    });
-    console.log('Parsed data', JSON.parse(message.data));
-    console.groupEnd();
+  console.group(`Received server event ${hours}:${minutes}:${seconds}`);
+  console.table({
+    [message.id]: {
+      event: message.event,
+      data,
+      retry: message.retry,
+    },
+  });
+  console.log("Parsed data", JSON.parse(message.data));
+  console.groupEnd();
 }

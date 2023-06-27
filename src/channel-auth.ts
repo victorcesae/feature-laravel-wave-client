@@ -1,54 +1,63 @@
 import request from "./util/request";
 
 import { EventSourceConnection } from "./EventSourceConnection";
-import { Options } from './echo-broadcaster/wave-connector';
+import { Options } from "./echo-broadcaster/wave-connector";
 
 export interface AuthRequest {
-    after: (callback: Function) => AuthRequest;
-    response: Promise<void>;
+  after: (callback: Function) => AuthRequest;
+  response: Promise<void>;
 }
 
 export class AuthRequestError extends Error {
-    public response: Response;
-    constructor(message: string, response: Response) {
-        super(message);
-        this.name = 'AuthRequestError';
-        this.response = response;
-    }
+  public response: Response;
+  constructor(message: string, response: Response) {
+    super(message);
+    this.name = "AuthRequestError";
+    this.response = response;
+  }
 }
 
-export function authRequest(channel: string, connection: EventSourceConnection, options: Options): AuthRequest {
-    let authorized = false;
-    let afterAuthCallbacks: Function[] = [];
+export function authRequest(
+  channel: string,
+  connection: EventSourceConnection,
+  options: Options
+): AuthRequest {
+  let authorized = false;
+  let afterAuthCallbacks: Function[] = [];
 
-    function after(callback: Function) {
-        if (authorized) {
-            callback();
+  function after(callback: Function) {
+    if (authorized) {
+      callback();
 
-            return;
-        }
-
-        afterAuthCallbacks.push(callback);
-
-        return this;
+      return;
     }
 
-    const response = request(connection)
-        .post(options.authEndpoint, options, { channel_name: channel })
-        .then((response) => {
-            if (!response.ok) {
-                throw new AuthRequestError(`Auth request to failed with status ${response.status}`, response);
-            }
+    afterAuthCallbacks.push(callback);
 
-            authorized = true;
+    return this;
+  }
 
-            afterAuthCallbacks.forEach((callback) => callback(response));
+  const response = request(connection)
+    .post((options.host ?? "") + options.authEndpoint, options, {
+      channel_name: channel,
+    })
+    .then((response) => {
+      if (!response.ok) {
+        throw new AuthRequestError(
+          `Auth request to failed with status ${response.status}`,
+          response
+        );
+      }
 
-            afterAuthCallbacks = [];
-        });
+      authorized = true;
 
-    return {
-        after,
-        response,
-    }
+      afterAuthCallbacks.forEach((callback) => callback(response));
+
+      afterAuthCallbacks = [];
+    });
+
+  return {
+    after,
+    response,
+  };
 }
